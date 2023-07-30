@@ -1466,6 +1466,10 @@ static bool pl011_tx_chars(struct uart_amba_port *uap, bool from_irq)
 	struct circ_buf *xmit = &uap->port.state->xmit;
 	int count = uap->fifosize >> 1;
 
+	if ((uap->port.rs485.flags & SER_RS485_ENABLED) &&
+	    !uap->rs485_tx_started)
+		pl011_rs485_tx_start(uap);
+
 	if (uap->port.x_char) {
 		if (!pl011_tx_char(uap, uap->port.x_char, from_irq))
 			return true;
@@ -1476,10 +1480,6 @@ static bool pl011_tx_chars(struct uart_amba_port *uap, bool from_irq)
 		pl011_stop_tx(&uap->port);
 		return false;
 	}
-
-	if ((uap->port.rs485.flags & SER_RS485_ENABLED) &&
-	    !uap->rs485_tx_started)
-		pl011_rs485_tx_start(uap);
 
 	/* If we are using DMA mode, try to send some characters. */
 	if (pl011_dma_tx_irq(uap))
@@ -2166,6 +2166,13 @@ pl011_set_termios(struct uart_port *port, struct ktermios *termios,
 	 * ----------^----------^----------^----------^-----
 	 */
 	pl011_write_lcr_h(uap, lcr_h);
+
+	/*
+	 * Receive was disabled by pl011_disable_uart during shutdown.
+	 * Need to reenable receive if you need to use a tty_driver
+	 * returns from tty_find_polling_driver() after a port shutdown.
+	 */
+	old_cr |= UART011_CR_RXE;
 	pl011_write(old_cr, uap, REG_CR);
 
 	spin_unlock_irqrestore(&port->lock, flags);

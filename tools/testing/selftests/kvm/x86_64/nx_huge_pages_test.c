@@ -226,7 +226,7 @@ static void help(char *name)
 	puts("");
 	printf("usage: %s [-h] [-p period_ms] [-t token]\n", name);
 	puts("");
-	printf(" -p: The NX reclaim period in miliseconds.\n");
+	printf(" -p: The NX reclaim period in milliseconds.\n");
 	printf(" -t: The magic token to indicate environment setup is done.\n");
 	printf(" -r: The test has reboot permissions and can disable NX huge pages.\n");
 	puts("");
@@ -241,7 +241,7 @@ int main(int argc, char **argv)
 	while ((opt = getopt(argc, argv, "hp:t:r")) != -1) {
 		switch (opt) {
 		case 'p':
-			reclaim_period_ms = atoi_non_negative("Reclaim period", optarg);
+			reclaim_period_ms = atoi_positive("Reclaim period", optarg);
 			break;
 		case 't':
 			token = atoi_paranoid(optarg);

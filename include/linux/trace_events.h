@@ -270,6 +270,7 @@ struct trace_event_fields {
 			const int  align;
 			const int  is_signed;
 			const int  filter_type;
+			const int  len;
 		};
 		int (*define_fields)(struct trace_event_call *);
 	};
@@ -317,6 +318,7 @@ enum {
 	TRACE_EVENT_FL_KPROBE_BIT,
 	TRACE_EVENT_FL_UPROBE_BIT,
 	TRACE_EVENT_FL_EPROBE_BIT,
+	TRACE_EVENT_FL_FPROBE_BIT,
 	TRACE_EVENT_FL_CUSTOM_BIT,
 };
 
@@ -331,6 +333,7 @@ enum {
  *  KPROBE        - Event is a kprobe
  *  UPROBE        - Event is a uprobe
  *  EPROBE        - Event is an event probe
+ *  FPROBE        - Event is an function probe
  *  CUSTOM        - Event is a custom event (to be attached to an exsiting tracepoint)
  *                   This is set when the custom event has not been attached
  *                   to a tracepoint yet, then it is cleared when it is.
@@ -345,6 +348,7 @@ enum {
 	TRACE_EVENT_FL_KPROBE		= (1 << TRACE_EVENT_FL_KPROBE_BIT),
 	TRACE_EVENT_FL_UPROBE		= (1 << TRACE_EVENT_FL_UPROBE_BIT),
 	TRACE_EVENT_FL_EPROBE		= (1 << TRACE_EVENT_FL_EPROBE_BIT),
+	TRACE_EVENT_FL_FPROBE		= (1 << TRACE_EVENT_FL_FPROBE_BIT),
 	TRACE_EVENT_FL_CUSTOM		= (1 << TRACE_EVENT_FL_CUSTOM_BIT),
 };
 
@@ -805,6 +809,7 @@ enum {
 	FILTER_TRACE_FN,
 	FILTER_COMM,
 	FILTER_CPU,
+	FILTER_STACKTRACE,
 };
 
 extern int trace_event_raw_init(struct trace_event_call *call);

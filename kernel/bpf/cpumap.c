@@ -28,7 +28,6 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
-#include <linux/capability.h>
 #include <trace/events/xdp.h>
 #include <linux/btf_ids.h>
 
@@ -89,9 +88,6 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	u32 value_size = attr->value_size;
 	struct bpf_cpu_map *cmap;
 
-	if (!bpf_capable())
-		return ERR_PTR(-EPERM);
-
 	/* check sanity of attributes */
 	if (attr->max_entries == 0 || attr->key_size != 4 ||
 	    (value_size != offsetofend(struct bpf_cpumap_val, qsize) &&
@@ -126,22 +122,6 @@ static void get_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 	atomic_inc(&rcpu->refcnt);
 }
 
-/* called from workqueue, to workaround syscall using preempt_disable */
-static void cpu_map_kthread_stop(struct work_struct *work)
-{
-	struct bpf_cpu_map_entry *rcpu;
-
-	rcpu = container_of(work, struct bpf_cpu_map_entry, kthread_stop_wq);
-
-	/* Wait for flush in __cpu_map_entry_free(), via full RCU barrier,
-	 * as it waits until all in-flight call_rcu() callbacks complete.
-	 */
-	rcu_barrier();
-
-	/* kthread_stop will wake_up_process and wait for it to complete */
-	kthread_stop(rcpu->kthread);
-}
-
 static void __cpu_map_ring_cleanup(struct ptr_ring *ring)
 {
 	/* The tear-down procedure should have made sure that queue is
@@ -166,6 +146,30 @@ static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 		ptr_ring_cleanup(rcpu->queue, NULL);
 		kfree(rcpu->queue);
 		kfree(rcpu);
+	}
+}
+
+/* called from workqueue, to workaround syscall using preempt_disable */
+static void cpu_map_kthread_stop(struct work_struct *work)
+{
+	struct bpf_cpu_map_entry *rcpu;
+	int err;
+
+	rcpu = container_of(work, struct bpf_cpu_map_entry, kthread_stop_wq);
+
+	/* Wait for flush in __cpu_map_entry_free(), via full RCU barrier,
+	 * as it waits until all in-flight call_rcu() callbacks complete.
+	 */
+	rcu_barrier();
+
+	/* kthread_stop will wake_up_process and wait for it to complete */
+	err = kthread_stop(rcpu->kthread);
+	if (err) {
+		/* kthread_stop may be called before cpu_map_kthread_run
+		 * is executed, so we need to release the memory related
+		 * to rcpu.
+		 */
+		put_cpu_map_entry(rcpu);
 	}
 }
 
@@ -361,7 +365,7 @@ static int cpu_map_kthread_run(void *data)
 		/* Support running another XDP prog on this CPU */
 		nframes = cpu_map_bpf_prog_run(rcpu, frames, xdp_n, &stats, &list);
 		if (nframes) {
-			m = kmem_cache_alloc_bulk(skbuff_head_cache, gfp, nframes, skbs);
+			m = kmem_cache_alloc_bulk(skbuff_cache, gfp, nframes, skbs);
 			if (unlikely(m == 0)) {
 				for (i = 0; i < nframes; i++)
 					skbs[i] = NULL; /* effect: xdp_return_frame */
@@ -540,7 +544,7 @@ static void __cpu_map_entry_replace(struct bpf_cpu_map *cmap,
 	}
 }
 
-static int cpu_map_delete_elem(struct bpf_map *map, void *key)
+static long cpu_map_delete_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_cpu_map *cmap = container_of(map, struct bpf_cpu_map, map);
 	u32 key_cpu = *(u32 *)key;
@@ -553,8 +557,8 @@ static int cpu_map_delete_elem(struct bpf_map *map, void *key)
 	return 0;
 }
 
-static int cpu_map_update_elem(struct bpf_map *map, void *key, void *value,
-			       u64 map_flags)
+static long cpu_map_update_elem(struct bpf_map *map, void *key, void *value,
+				u64 map_flags)
 {
 	struct bpf_cpu_map *cmap = container_of(map, struct bpf_cpu_map, map);
 	struct bpf_cpumap_val cpumap_value = {};
@@ -667,10 +671,19 @@ static int cpu_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 	return 0;
 }
 
-static int cpu_map_redirect(struct bpf_map *map, u64 index, u64 flags)
+static long cpu_map_redirect(struct bpf_map *map, u64 index, u64 flags)
 {
 	return __bpf_xdp_redirect_map(map, index, flags, 0,
 				      __cpu_map_lookup_elem);
+}
+
+static u64 cpu_map_mem_usage(const struct bpf_map *map)
+{
+	u64 usage = sizeof(struct bpf_cpu_map);
+
+	/* Currently the dynamically allocated elements are not counted */
+	usage += (u64)map->max_entries * sizeof(struct bpf_cpu_map_entry *);
+	return usage;
 }
 
 BTF_ID_LIST_SINGLE(cpu_map_btf_ids, struct, bpf_cpu_map)
@@ -683,6 +696,7 @@ const struct bpf_map_ops cpu_map_ops = {
 	.map_lookup_elem	= cpu_map_lookup_elem,
 	.map_get_next_key	= cpu_map_get_next_key,
 	.map_check_btf		= map_check_no_btf,
+	.map_mem_usage		= cpu_map_mem_usage,
 	.map_btf_id		= &cpu_map_btf_ids[0],
 	.map_redirect		= cpu_map_redirect,
 };
