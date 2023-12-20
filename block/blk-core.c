@@ -208,6 +208,7 @@ const char *blk_status_to_str(blk_status_t status)
 		return "<null>";
 	return blk_errors[idx].name;
 }
+EXPORT_SYMBOL_GPL(blk_status_to_str);
 
 /**
  * blk_sync_queue - cancel any pending callbacks on a queue
@@ -500,9 +501,17 @@ static inline void bio_check_ro(struct bio *bio)
 	if (op_is_write(bio_op(bio)) && bdev_read_only(bio->bi_bdev)) {
 		if (op_is_flush(bio->bi_opf) && !bio_sectors(bio))
 			return;
+
+		if (bio->bi_bdev->bd_ro_warned)
+			return;
+
+		bio->bi_bdev->bd_ro_warned = true;
+		/*
+		 * Use ioctl to set underlying disk of raid/dm to read-only
+		 * will trigger this.
+		 */
 		pr_warn("Trying to write to read-only block-device %pg\n",
 			bio->bi_bdev);
-		/* Older lvm-tools actually trigger this */
 	}
 }
 
@@ -722,13 +731,8 @@ void submit_bio_noacct(struct bio *bio)
 	struct block_device *bdev = bio->bi_bdev;
 	struct request_queue *q = bdev_get_queue(bdev);
 	blk_status_t status = BLK_STS_IOERR;
-	struct blk_plug *plug;
 
 	might_sleep();
-
-	plug = blk_mq_plug(bio);
-	if (plug && plug->nowait)
-		bio->bi_opf |= REQ_NOWAIT;
 
 	/*
 	 * For a REQ_NOWAIT based request, return -EOPNOTSUPP
@@ -1059,7 +1063,6 @@ void blk_start_plug_nr_ios(struct blk_plug *plug, unsigned short nr_ios)
 	plug->rq_count = 0;
 	plug->multiple_queues = false;
 	plug->has_elevator = false;
-	plug->nowait = false;
 	INIT_LIST_HEAD(&plug->cb_list);
 
 	/*
